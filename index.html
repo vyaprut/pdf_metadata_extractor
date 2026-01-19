@@ -107,7 +107,7 @@
     <div class="wrap">
       <header>
         <h1>PDF Metadata Viewer</h1>
-        <p>Upload a PDF to view parsed fields and raw metadata.</p>
+        <p>Upload a PDF to view parsed fields and full metadata.</p>
       </header>
 
       <form id="upload-form" class="card">
@@ -130,9 +130,19 @@
           </div>
         </div>
 
+        <section class="card">
+          <h2>All Metadata (Info + XMP)</h2>
+          <pre id="all-metadata"></pre>
+        </section>
+
+        <details class="card">
+          <summary>Raw XMP XML</summary>
+          <pre id="xmp-xml"></pre>
+        </details>
       </section>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.js"></script>
     <script>
       const form = document.getElementById("upload-form");
       const input = document.getElementById("pdf-input");
@@ -141,17 +151,16 @@
       const resultsEl = document.getElementById("results");
       const parsedList = document.getElementById("parsed-list");
       const summaryList = document.getElementById("summary-list");
+      const allMetadataEl = document.getElementById("all-metadata");
+      const xmpXmlEl = document.getElementById("xmp-xml");
       const submitBtn = document.getElementById("submit-btn");
 
-      function arrayBufferToBase64(buffer) {
-        const bytes = new Uint8Array(buffer);
-        let binary = "";
-        const chunkSize = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-          const chunk = bytes.subarray(i, i + chunkSize);
-          binary += String.fromCharCode.apply(null, chunk);
-        }
-        return btoa(binary);
+      const pdfjsVersion = "4.2.67";
+      if (window.pdfjsLib) {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+          "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/" +
+          pdfjsVersion +
+          "/pdf.worker.min.js";
       }
 
       function setStatus(text) {
@@ -161,6 +170,60 @@
       function clearResults() {
         parsedList.innerHTML = "";
         summaryList.innerHTML = "";
+        allMetadataEl.textContent = "";
+        xmpXmlEl.textContent = "";
+      }
+
+      function parsePdfDateToIST(value) {
+        if (!value) {
+          return "";
+        }
+        let dateStr = value.startsWith("D:") ? value.slice(2) : value;
+        const toNum = (start, length) => {
+          const part = dateStr.slice(start, start + length);
+          return part.length === length && /^\d+$/.test(part)
+            ? Number(part)
+            : null;
+        };
+        const year = toNum(0, 4);
+        const month = toNum(4, 2);
+        const day = toNum(6, 2);
+        const hour = toNum(8, 2) ?? 0;
+        const minute = toNum(10, 2) ?? 0;
+        const second = toNum(12, 2) ?? 0;
+        if (!year || !month || !day) {
+          return String(value);
+        }
+
+        let offsetMinutes = 0;
+        const tzPart = dateStr.slice(14);
+        if (tzPart && (tzPart[0] === "+" || tzPart[0] === "-")) {
+          const sign = tzPart[0] === "-" ? -1 : 1;
+          const tzHour = Number(tzPart.slice(1, 3)) || 0;
+          const tzMin = Number(tzPart.slice(4, 6)) || 0;
+          offsetMinutes = sign * (tzHour * 60 + tzMin);
+        }
+
+        const utcMillis =
+          Date.UTC(year, month - 1, day, hour, minute, second) -
+          offsetMinutes * 60 * 1000;
+        const istOffset = 5 * 60 + 30;
+        const istDate = new Date(utcMillis + istOffset * 60 * 1000);
+        const pad = (num) => String(num).padStart(2, "0");
+        return (
+          istDate.getUTCFullYear() +
+          "-" +
+          pad(istDate.getUTCMonth() + 1) +
+          "-" +
+          pad(istDate.getUTCDate()) +
+          " " +
+          pad(istDate.getUTCHours()) +
+          ":" +
+          pad(istDate.getUTCMinutes()) +
+          ":" +
+          pad(istDate.getUTCSeconds()) +
+          " IST"
+        );
       }
 
       form.addEventListener("submit", async (event) => {
@@ -181,24 +244,38 @@
 
         try {
           const buffer = await file.arrayBuffer();
-          const fileBase64 = arrayBufferToBase64(buffer);
-
-          setStatus("Extracting metadata...");
-          const response = await fetch("/.netlify/functions/metadata", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              filename: file.name,
-              file_base64: fileBase64,
-            }),
-          });
-          const data = await response.json();
-          if (!data.ok) {
-            throw new Error(data.error || "Unknown error");
+          if (!window.pdfjsLib) {
+            throw new Error("PDF.js failed to load.");
           }
 
-          const result = data.result;
-          Object.entries(result.parsed).forEach(([key, value]) => {
+          setStatus("Parsing PDF...");
+          const loadingTask = window.pdfjsLib.getDocument({ data: buffer });
+          const pdf = await loadingTask.promise;
+          const meta = await pdf.getMetadata();
+          const info = meta.info || {};
+          const metadata = meta.metadata || null;
+          const xmpAll = metadata ? metadata.getAll() : {};
+          const xmpRaw = metadata ? metadata.getRaw() : "";
+
+          const parsedFields = {
+            Title: info.Title || "",
+            Author: info.Author || "",
+            Subject: info.Subject || "",
+            Keywords: info.Keywords || "",
+            Creator: info.Creator || "",
+            Producer: info.Producer || "",
+            "CreationDate (IST)": parsePdfDateToIST(info.CreationDate || ""),
+            "ModDate (IST)": parsePdfDateToIST(info.ModDate || ""),
+            Trapped: info.Trapped || "",
+          };
+
+          Object.entries(xmpAll).forEach(([key, value]) => {
+            if (value !== null && value !== undefined && value !== "") {
+              parsedFields["XMP: " + key] = String(value);
+            }
+          });
+
+          Object.entries(parsedFields).forEach(([key, value]) => {
             const dt = document.createElement("dt");
             dt.textContent = key;
             const dd = document.createElement("dd");
@@ -207,9 +284,9 @@
           });
 
           const summary = {
-            Filename: result.filename,
-            "File Size (bytes)": result.size_bytes,
-            Pages: result.page_count,
+            Filename: file.name,
+            "File Size (bytes)": file.size,
+            Pages: pdf.numPages,
           };
           Object.entries(summary).forEach(([key, value]) => {
             const dt = document.createElement("dt");
@@ -218,6 +295,14 @@
             dd.textContent = value;
             summaryList.append(dt, dd);
           });
+
+          const allMetadata = {
+            info,
+            xmp: xmpAll,
+            xmpXml: xmpRaw || null,
+          };
+          allMetadataEl.textContent = JSON.stringify(allMetadata, null, 2);
+          xmpXmlEl.textContent = xmpRaw || "No XMP metadata found.";
 
           resultsEl.hidden = false;
           setStatus("");
