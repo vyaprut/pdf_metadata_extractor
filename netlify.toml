@@ -1,6 +1,2 @@
 [build]
   publish = "."
-  functions = "functions"
-
-[functions.metadata]
-  runtime = "python3.11"
