@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>PDF Metadata Viewer</title>
+    <title>PDF कुंडली</title>
     <style>
       :root {
         --bg: #f6f3ec;
@@ -106,7 +106,7 @@
   <body>
     <div class="wrap">
       <header>
-        <h1>PDF Metadata Viewer</h1>
+        <h1>PDF कुंडली</h1>
         <p>Upload a PDF to view parsed fields and full metadata.</p>
       </header>
 
@@ -260,12 +260,6 @@
             "ModDate (IST)": parsePdfDateToIST(info.ModDate || ""),
             Trapped: info.Trapped || "",
           };
-
-          Object.entries(xmpAll).forEach(([key, value]) => {
-            if (value !== null && value !== undefined && value !== "") {
-              parsedFields["XMP: " + key] = String(value);
-            }
-          });
 
           Object.entries(parsedFields).forEach(([key, value]) => {
             const dt = document.createElement("dt");
