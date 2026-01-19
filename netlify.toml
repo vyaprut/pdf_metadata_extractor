@@ -1,0 +1,6 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+[functions.metadata]
+  runtime = "python3.11"

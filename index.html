@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PDF Metadata Viewer</title>
+    <style>
+      :root {
+        --bg: #f6f3ec;
+        --fg: #1a1a1a;
+        --accent: #a24d2f;
+        --card: #fffaf1;
+        --muted: #6b625a;
+      }
+      body {
+        margin: 0;
+        font-family: "Georgia", "Times New Roman", serif;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      .wrap {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 32px 20px 60px;
+      }
+      header {
+        margin-bottom: 18px;
+      }
+      h1 {
+        font-size: 32px;
+        margin: 0 0 8px;
+        letter-spacing: 0.5px;
+      }
+      p {
+        margin: 0;
+        color: var(--muted);
+      }
+      form {
+        margin: 18px 0 28px;
+        display: grid;
+        gap: 10px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid #e2d8c7;
+        border-radius: 12px;
+        padding: 16px;
+      }
+      input[type="file"] {
+        padding: 8px;
+      }
+      button {
+        width: 200px;
+        padding: 10px 14px;
+        border: none;
+        border-radius: 8px;
+        background: var(--accent);
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:hover {
+        filter: brightness(0.95);
+      }
+      button[disabled] {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .grid {
+        display: grid;
+        gap: 12px;
+      }
+      .grid-2 {
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      }
+      dl {
+        margin: 0;
+      }
+      dt {
+        font-weight: 700;
+        margin-top: 8px;
+      }
+      dd {
+        margin: 2px 0 0 0;
+        color: var(--muted);
+        word-break: break-word;
+      }
+      pre {
+        background: #1f1b16;
+        color: #f0e6d8;
+        padding: 14px;
+        border-radius: 10px;
+        overflow: auto;
+        max-height: 420px;
+      }
+      .error {
+        color: #8b1c1c;
+        font-weight: 600;
+      }
+      .status {
+        color: var(--muted);
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1>PDF Metadata Viewer</h1>
+        <p>Upload a PDF to view parsed fields and raw metadata.</p>
+      </header>
+
+      <form id="upload-form" class="card">
+        <input type="file" id="pdf-input" accept="application/pdf" />
+        <button type="submit" id="submit-btn">Extract Metadata</button>
+        <span class="status" id="status"></span>
+      </form>
+
+      <p class="error" id="error" hidden></p>
+
+      <section id="results" hidden>
+        <div class="grid grid-2">
+          <div class="card">
+            <h2>Parsed Fields</h2>
+            <dl id="parsed-list"></dl>
+          </div>
+          <div class="card">
+            <h2>File Summary</h2>
+            <dl id="summary-list"></dl>
+          </div>
+        </div>
+
+      </section>
+    </div>
+
+    <script>
+      const form = document.getElementById("upload-form");
+      const input = document.getElementById("pdf-input");
+      const errorEl = document.getElementById("error");
+      const statusEl = document.getElementById("status");
+      const resultsEl = document.getElementById("results");
+      const parsedList = document.getElementById("parsed-list");
+      const summaryList = document.getElementById("summary-list");
+      const submitBtn = document.getElementById("submit-btn");
+
+      function arrayBufferToBase64(buffer) {
+        const bytes = new Uint8Array(buffer);
+        let binary = "";
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          const chunk = bytes.subarray(i, i + chunkSize);
+          binary += String.fromCharCode.apply(null, chunk);
+        }
+        return btoa(binary);
+      }
+
+      function setStatus(text) {
+        statusEl.textContent = text || "";
+      }
+
+      function clearResults() {
+        parsedList.innerHTML = "";
+        summaryList.innerHTML = "";
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        errorEl.hidden = true;
+        clearResults();
+        resultsEl.hidden = true;
+
+        const file = input.files[0];
+        if (!file) {
+          errorEl.textContent = "Please choose a PDF file.";
+          errorEl.hidden = false;
+          return;
+        }
+
+        submitBtn.disabled = true;
+        setStatus("Reading file...");
+
+        try {
+          const buffer = await file.arrayBuffer();
+          const fileBase64 = arrayBufferToBase64(buffer);
+
+          setStatus("Extracting metadata...");
+          const response = await fetch("/.netlify/functions/metadata", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              filename: file.name,
+              file_base64: fileBase64,
+            }),
+          });
+          const data = await response.json();
+          if (!data.ok) {
+            throw new Error(data.error || "Unknown error");
+          }
+
+          const result = data.result;
+          Object.entries(result.parsed).forEach(([key, value]) => {
+            const dt = document.createElement("dt");
+            dt.textContent = key;
+            const dd = document.createElement("dd");
+            dd.textContent = value || "-";
+            parsedList.append(dt, dd);
+          });
+
+          const summary = {
+            Filename: result.filename,
+            "File Size (bytes)": result.size_bytes,
+            Pages: result.page_count,
+          };
+          Object.entries(summary).forEach(([key, value]) => {
+            const dt = document.createElement("dt");
+            dt.textContent = key;
+            const dd = document.createElement("dd");
+            dd.textContent = value;
+            summaryList.append(dt, dd);
+          });
+
+          resultsEl.hidden = false;
+          setStatus("");
+        } catch (err) {
+          errorEl.textContent = err.message || "Failed to extract metadata.";
+          errorEl.hidden = false;
+          setStatus("");
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
